@@ -24,6 +24,7 @@ EXPENSE_CATEGORIES = {
     "Clothing": ("Outerwear", "Casual", "Shoes", "Accessories"),
     "Education": ("Courses", "Books", "Tutors"),
     "Communications": ("Mobile", "Internet", "Subscriptions"),
+    "Other": ("SomeCategory", "SomeOtherCategory")
 }
 
 
