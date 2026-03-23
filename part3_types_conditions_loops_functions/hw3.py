@@ -27,7 +27,6 @@ EXPENSE_CATEGORIES = {
     "Other": ("SomeCategory", "SomeOtherCategory")
 }
 
-
 financial_transactions_storage: list[dict[str, Any]] = []
 
 
