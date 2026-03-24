@@ -15,22 +15,24 @@
 
 Ваша система должна состоять из трех независимых компонентов, взаимодействующих через интерфейсы.
 
-### 1.1. Хранилище (BaseStorage)
-Создайте базовый класс `BaseStorage` и его реализацию `DictStorage`.
+### 1.1. Хранилище (Storage)
+Создайте реализацию `DictStorage`, который имплементирует протокол Storage.
 *   Методы: `set(key, value)`, `get(key)`, `exists(key)`, `remove(key)`, `clear()`.
 *   **DictStorage** должен инкапсулировать обычный словарь `dict`.
 
-### 1.2. Стратегия вытеснения (BasePolicy)
-Создайте базовый класс `BasePolicy`, который определяет, какой ключ нужно удалить следующим.
-*   Методы: `register_access(key)` (вызывается при чтении/записи), `get_key_to_evict()` (возвращает ключ для удаления).
+### 1.2. Стратегия вытеснения (Policy)
+Протокол `Policy` определяет какой ключ нужно удалить следующим.
+*   Интерфейс `Policy` не диктует способ создания объекта и не содержит параметров инициализации — это оставлено на усмотрение конкретных реализаций.
+*   Методы: `register_access(key)` (вызывается при чтении/записи), `get_key_to_evict()` (возвращает ключ для удаления, если лимит превышен, иначе `None`), `remove_key(key)` (вызывается при удалении ключа из кэша), `clear()` (вызывается при полной очистке кэша).
 *   Реализуйте как минимум две стратегии:
-    *   **FIFOPolicy (First-In-First-Out)**: удаляет самый старый добавленный ключ.
-    *   **LRUPolicy (Least Recently Used)**: удаляет ключ, к которому дольше всего не обращались.
+    *   **FIFOPolicy (First-In-First-Out)**: удаляет самый старый добавленный ключ. Конструктор принимает `capacity`.
+    *   **LRUPolicy (Least Recently Used)**: удаляет ключ, к которому дольше всего не обращались. Конструктор принимает `capacity`.
 
 ### 1.3. Контроллер кэша (Cache)
 Класс `Cache` должен принимать объекты `storage` и `policy` через конструктор (**Dependency Injection**).
-*   При добавлении элемента (`set`), если достигнут лимит `capacity`, `Cache` спрашивает у `policy`, какой ключ удалить, удаляет его из `storage` и добавляет новый.
+*   При добавлении элемента (`set`) `Cache` уведомляет `policy` через `register_access`, затем проверяет `policy.get_key_to_evict()`. Если возвращён ключ — удаляет его из `storage` и из `policy`.
 *   При каждом обращении к кэшу (`get`, `set`) он должен уведомлять `policy` через `register_access`.
+*   Методы `exists(key)`, `remove(key)`, `clear()` должны синхронно обновлять как `storage`, так и `policy`.
 
 ---
 
@@ -64,7 +66,7 @@ class HeavyCalculator:
     # Теперь при обращении к calculator.big_data будет срабатывать логика кэширования
     big_data = CachedProperty(compute_sum)
 
-cache = Cache(storage=DictStorage(), policy=LRUPolicy(), capacity=10)
+cache = Cache(storage=DictStorage(), policy=LRUPolicy(capacity=10))
 calculator = HeavyCalculator(cache)
 
 print(calculator.big_data) # Сработают вычисления
