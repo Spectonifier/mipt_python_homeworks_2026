@@ -23,6 +23,9 @@ MAX_AMOUNT_PARTS = 2
 CAPITAL_KEY = "capital"
 INCOME_KEY = "income"
 EXPENSES_KEY = "expenses"
+AMOUNT_KEY = "amount"
+DATE_KEY = "date"
+CATEGORY_KEY = "category"
 
 EXPENSE_CATEGORIES = {
     "Food": ("Supermarket", "Restaurants", "FastFood", "Coffee", "Delivery"),
@@ -38,6 +41,8 @@ EXPENSE_CATEGORIES = {
 
 Date = tuple[int, int, int]
 Transaction = dict[str, Any]
+Totals = dict[str, float]
+CategoryTotals = dict[str, float]
 
 financial_transactions_storage: list[Transaction] = []
 
@@ -125,7 +130,7 @@ def income_handler(amount: float, income_date: str) -> str:
         save_failed_transaction()
         return INCORRECT_DATE_MSG
 
-    financial_transactions_storage.append({"amount": amount, "date": date})
+    financial_transactions_storage.append({AMOUNT_KEY: amount, DATE_KEY: date})
     return OP_SUCCESS_MSG
 
 
@@ -157,7 +162,7 @@ def cost_handler(category_name: str, amount: float, income_date: str) -> str:
         save_failed_transaction()
         return INCORRECT_DATE_MSG
 
-    financial_transactions_storage.append({"category": category_name, "amount": amount, "date": date})
+    financial_transactions_storage.append({CATEGORY_KEY: category_name, AMOUNT_KEY: amount, DATE_KEY: date})
     return OP_SUCCESS_MSG
 
 
@@ -178,7 +183,15 @@ def is_same_month(lhs: Date, rhs: Date) -> bool:
 
 
 def date_comparator(lhs: Date, rhs: Date) -> bool:
-    return lhs[::-1] < rhs[::-1]
+    return (
+        lhs[YEAR_INDEX],
+        lhs[MONTH_INDEX],
+        lhs[DAY_INDEX],
+    ) < (
+        rhs[YEAR_INDEX],
+        rhs[MONTH_INDEX],
+        rhs[DAY_INDEX],
+    )
 
 
 def format_amount(amount: float) -> str:
@@ -190,7 +203,7 @@ def format_amount(amount: float) -> str:
     return formatted_amount
 
 
-def _empty_totals() -> dict[str, float]:
+def _empty_totals() -> Totals:
     return {
         CAPITAL_KEY: 0,
         INCOME_KEY: 0,
@@ -201,50 +214,59 @@ def _empty_totals() -> dict[str, float]:
 def _should_skip_transaction(transaction: Transaction, report_date: Date) -> bool:
     if not transaction:
         return True
-    return date_comparator(report_date, transaction["date"])
+    return date_comparator(report_date, transaction[DATE_KEY])
 
 
-def _update_category_total(category_totals: dict[str, float], category_name: str, amount: float) -> None:
+def _update_category_total(category_totals: CategoryTotals, category_name: str, amount: float) -> None:
     target_category = get_target_category(category_name)
     if target_category not in category_totals:
         category_totals[target_category] = 0
     category_totals[target_category] += amount
 
 
-def _apply_income_transaction(transaction: Transaction, report_date: Date, totals: dict[str, float]) -> None:
-    amount = transaction["amount"]
+def _apply_income_transaction(transaction: Transaction, report_date: Date, totals: Totals) -> None:
+    amount = transaction[AMOUNT_KEY]
     totals[CAPITAL_KEY] += amount
-    if is_same_month(transaction["date"], report_date):
+    if is_same_month(transaction[DATE_KEY], report_date):
         totals[INCOME_KEY] += amount
 
 
 def _apply_expense_transaction(
     transaction: Transaction,
     report_date: Date,
-    totals: dict[str, float],
-    category_totals: dict[str, float],
+    totals: Totals,
+    category_totals: CategoryTotals,
 ) -> None:
-    amount = transaction["amount"]
+    amount = transaction[AMOUNT_KEY]
     totals[CAPITAL_KEY] -= amount
-    if is_same_month(transaction["date"], report_date):
+    if is_same_month(transaction[DATE_KEY], report_date):
         totals[EXPENSES_KEY] += amount
-        _update_category_total(category_totals, transaction["category"], amount)
+        _update_category_total(category_totals, transaction[CATEGORY_KEY], amount)
 
 
-def _calculate_stats(report_date: Date) -> tuple[dict[str, float], dict[str, float]]:
+def _apply_transaction(
+    transaction: Transaction,
+    report_date: Date,
+    totals: Totals,
+    category_totals: CategoryTotals,
+) -> None:
+    if CATEGORY_KEY in transaction:
+        _apply_expense_transaction(transaction, report_date, totals, category_totals)
+        return
+    _apply_income_transaction(transaction, report_date, totals)
+
+
+def _calculate_stats(report_date: Date) -> tuple[Totals, CategoryTotals]:
     totals = _empty_totals()
-    category_totals: dict[str, float] = {}
+    category_totals: CategoryTotals = {}
     for transaction in financial_transactions_storage:
         if _should_skip_transaction(transaction, report_date):
             continue
-        if "category" in transaction:
-            _apply_expense_transaction(transaction, report_date, totals, category_totals)
-        else:
-            _apply_income_transaction(transaction, report_date, totals)
+        _apply_transaction(transaction, report_date, totals, category_totals)
     return totals, category_totals
 
 
-def _get_month_result(totals: dict[str, float]) -> tuple[str, float]:
+def _get_month_result(totals: Totals) -> tuple[str, float]:
     monthly_balance = totals[INCOME_KEY] - totals[EXPENSES_KEY]
     if monthly_balance < 0:
         return "loss", -monthly_balance
@@ -255,13 +277,9 @@ def _category_sort_key(category_total: tuple[str, float]) -> str:
     return category_total[0].lower()
 
 
-def _build_stats_lines(
-    report_date: str,
-    totals: dict[str, float],
-    category_totals: dict[str, float],
-) -> list[str]:
+def _build_stats_header(report_date: str, totals: Totals) -> list[str]:
     result_type, result_amount = _get_month_result(totals)
-    stats_lines = [
+    return [
         f"Your statistics as of {report_date}:",
         f"Total capital: {totals[CAPITAL_KEY]:.2f} rubles",
         f"This month, the {result_type} amounted to {result_amount:.2f} rubles.",
@@ -270,11 +288,23 @@ def _build_stats_lines(
         "",
         "Details (category: amount):",
     ]
+
+
+def _append_category_lines(stats_lines: list[str], category_totals: CategoryTotals) -> None:
     for index, (category_name, amount) in enumerate(
         sorted(category_totals.items(), key=_category_sort_key),
         start=1,
     ):
         stats_lines.append(f"{index}. {category_name}: {format_amount(amount)}")
+
+
+def _build_stats_lines(
+    report_date: str,
+    totals: Totals,
+    category_totals: CategoryTotals,
+) -> list[str]:
+    stats_lines = _build_stats_header(report_date, totals)
+    _append_category_lines(stats_lines, category_totals)
     return stats_lines
 
 
