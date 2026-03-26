@@ -15,6 +15,15 @@ COST_CATEGORIES_QUERY_LENGTH = 2
 COST_QUERY_LENGTH = 4
 STATS_QUERY_LENGTH = 2
 
+DAY_INDEX = 0
+MONTH_INDEX = 1
+YEAR_INDEX = 2
+MAX_AMOUNT_PARTS = 2
+
+CAPITAL_KEY = "capital"
+INCOME_KEY = "income"
+EXPENSES_KEY = "expenses"
+
 EXPENSE_CATEGORIES = {
     "Food": ("Supermarket", "Restaurants", "FastFood", "Coffee", "Delivery"),
     "Transport": ("Taxi", "Public transport", "Gas", "Car service"),
@@ -27,7 +36,10 @@ EXPENSE_CATEGORIES = {
     "Other": ("SomeCategory", "SomeOtherCategory")
 }
 
-financial_transactions_storage: list[dict[str, Any]] = []
+Date = tuple[int, int, int]
+Transaction = dict[str, Any]
+
+financial_transactions_storage: list[Transaction] = []
 
 
 def save_failed_transaction() -> None:
@@ -48,53 +60,59 @@ def get_days_in_month(month: int, year: int) -> int:
     return 31
 
 
-def extract_date(maybe_dt: str) -> tuple[int, int, int] | None:
-    date_list = maybe_dt.split("-")
-
-    if len(date_list) != len(DATE_LENGTHS):
-        return None
-
-    for part, expected_length in zip(date_list, DATE_LENGTHS, strict=True):
+def _has_valid_date_parts(date_parts: list[str]) -> bool:
+    if len(date_parts) != len(DATE_LENGTHS):
+        return False
+    for part, expected_length in zip(date_parts, DATE_LENGTHS, strict=True):
         if len(part) != expected_length or not part.isdigit():
-            return None
+            return False
+    return True
 
-    day, month, year = map(int, date_list)
 
+def _build_date(date_parts: list[str]) -> Date:
+    return (
+        int(date_parts[DAY_INDEX]),
+        int(date_parts[MONTH_INDEX]),
+        int(date_parts[YEAR_INDEX]),
+    )
+
+
+def _is_valid_date(date: Date) -> bool:
+    month = date[MONTH_INDEX]
     if month < 1 or month > MONTHS_IN_YEAR:
-        return None
+        return False
+    day = date[DAY_INDEX]
+    return 1 <= day <= get_days_in_month(month, date[YEAR_INDEX])
 
-    days_in_month = get_days_in_month(month, year)
-    if day < 1 or day > days_in_month:
-        return None
 
-    return day, month, year
+def extract_date(maybe_dt: str) -> Date | None:
+    date_parts = maybe_dt.split("-")
+    if not _has_valid_date_parts(date_parts):
+        return None
+    date = _build_date(date_parts)
+    if not _is_valid_date(date):
+        return None
+    return date
+
+
+def _strip_sign(amount: str) -> str:
+    if amount.startswith(("+", "-")):
+        return amount[1:]
+    return amount
+
+
+def _has_valid_amount_body(amount_body: str) -> bool:
+    amount_parts = amount_body.split(".")
+    return len(amount_parts) <= MAX_AMOUNT_PARTS and all(amount_parts) and all(
+        part.isdigit() for part in amount_parts
+    )
 
 
 def extract_amount(maybe_amount: str) -> float | None:
     normalized_amount = maybe_amount.replace(",", ".")
-
-    if normalized_amount.count(".") > 1:
+    if not _has_valid_amount_body(_strip_sign(normalized_amount)):
         return None
-
-    if normalized_amount.startswith(("+", "-")):
-        sign = normalized_amount[0]
-        normalized_amount = normalized_amount[1:]
-    else:
-        sign = ""
-
-    if not normalized_amount:
-        return None
-
-    if "." in normalized_amount:
-        left_part, right_part = normalized_amount.split(".", maxsplit=1)
-        if not left_part or not right_part:
-            return None
-        if not left_part.isdigit() or not right_part.isdigit():
-            return None
-    elif not normalized_amount.isdigit():
-        return None
-
-    return float(f"{sign}{normalized_amount}")
+    return float(normalized_amount)
 
 
 def income_handler(amount: float, income_date: str) -> str:
@@ -151,15 +169,16 @@ def cost_categories_handler() -> str:
     )
 
 
-def is_same_month(lhs: tuple[int, int, int], rhs: tuple[int, int, int]) -> bool:
-    return lhs[1] == rhs[1] and lhs[2] == rhs[2]
+def _month_and_year(date: Date) -> tuple[int, int]:
+    return date[MONTH_INDEX], date[YEAR_INDEX]
 
 
-def date_comparator(lhs: tuple[int, int, int], rhs: tuple[int, int, int]) -> bool:
-    for i in range(2, -1, -1):
-        if lhs[i] != rhs[i]:
-            return lhs[i] < rhs[i]
-    return False
+def is_same_month(lhs: Date, rhs: Date) -> bool:
+    return _month_and_year(lhs) == _month_and_year(rhs)
+
+
+def date_comparator(lhs: Date, rhs: Date) -> bool:
+    return lhs[::-1] < rhs[::-1]
 
 
 def format_amount(amount: float) -> str:
@@ -171,59 +190,100 @@ def format_amount(amount: float) -> str:
     return formatted_amount
 
 
+def _empty_totals() -> dict[str, float]:
+    return {
+        CAPITAL_KEY: 0,
+        INCOME_KEY: 0,
+        EXPENSES_KEY: 0,
+    }
+
+
+def _should_skip_transaction(transaction: Transaction, report_date: Date) -> bool:
+    if not transaction:
+        return True
+    return date_comparator(report_date, transaction["date"])
+
+
+def _update_category_total(category_totals: dict[str, float], category_name: str, amount: float) -> None:
+    target_category = get_target_category(category_name)
+    if target_category not in category_totals:
+        category_totals[target_category] = 0
+    category_totals[target_category] += amount
+
+
+def _apply_income_transaction(transaction: Transaction, report_date: Date, totals: dict[str, float]) -> None:
+    amount = transaction["amount"]
+    totals[CAPITAL_KEY] += amount
+    if is_same_month(transaction["date"], report_date):
+        totals[INCOME_KEY] += amount
+
+
+def _apply_expense_transaction(
+    transaction: Transaction,
+    report_date: Date,
+    totals: dict[str, float],
+    category_totals: dict[str, float],
+) -> None:
+    amount = transaction["amount"]
+    totals[CAPITAL_KEY] -= amount
+    if is_same_month(transaction["date"], report_date):
+        totals[EXPENSES_KEY] += amount
+        _update_category_total(category_totals, transaction["category"], amount)
+
+
+def _calculate_stats(report_date: Date) -> tuple[dict[str, float], dict[str, float]]:
+    totals = _empty_totals()
+    category_totals: dict[str, float] = {}
+    for transaction in financial_transactions_storage:
+        if _should_skip_transaction(transaction, report_date):
+            continue
+        if "category" in transaction:
+            _apply_expense_transaction(transaction, report_date, totals, category_totals)
+        else:
+            _apply_income_transaction(transaction, report_date, totals)
+    return totals, category_totals
+
+
+def _get_month_result(totals: dict[str, float]) -> tuple[str, float]:
+    monthly_balance = totals[INCOME_KEY] - totals[EXPENSES_KEY]
+    if monthly_balance < 0:
+        return "loss", -monthly_balance
+    return "profit", monthly_balance
+
+
+def _category_sort_key(category_total: tuple[str, float]) -> str:
+    return category_total[0].lower()
+
+
+def _build_stats_lines(
+    report_date: str,
+    totals: dict[str, float],
+    category_totals: dict[str, float],
+) -> list[str]:
+    result_type, result_amount = _get_month_result(totals)
+    stats_lines = [
+        f"Your statistics as of {report_date}:",
+        f"Total capital: {totals[CAPITAL_KEY]:.2f} rubles",
+        f"This month, the {result_type} amounted to {result_amount:.2f} rubles.",
+        f"Income: {totals[INCOME_KEY]:.2f} rubles",
+        f"Expenses: {totals[EXPENSES_KEY]:.2f} rubles",
+        "",
+        "Details (category: amount):",
+    ]
+    for index, (category_name, amount) in enumerate(
+        sorted(category_totals.items(), key=_category_sort_key),
+        start=1,
+    ):
+        stats_lines.append(f"{index}. {category_name}: {format_amount(amount)}")
+    return stats_lines
+
+
 def stats_handler(report_date: str) -> str:
     date = extract_date(report_date)
     if date is None:
         return INCORRECT_DATE_MSG
-
-    total_capital = 0.0
-    monthly_income = 0.0
-    monthly_expenses = 0.0
-    expenses_by_category: dict[str, float] = {}
-
-    for transaction in financial_transactions_storage:
-        if not transaction:
-            continue
-
-        transaction_date = transaction["date"]
-        if date_comparator(date, transaction_date):
-            continue
-
-        amount = transaction["amount"]
-        if "category" in transaction:
-            total_capital -= amount
-            if is_same_month(transaction_date, date):
-                monthly_expenses += amount
-                target_category = get_target_category(transaction["category"])
-                expenses_by_category[target_category] = expenses_by_category.get(target_category, 0.0) + amount
-        else:
-            total_capital += amount
-            if is_same_month(transaction_date, date):
-                monthly_income += amount
-
-    monthly_capital = monthly_income - monthly_expenses
-    result_type = "profit"
-    result_amount = monthly_capital
-
-    if monthly_capital < 0:
-        result_type = "loss"
-        result_amount = -monthly_capital
-
-    stats_lines = [
-        f"Your statistics as of {report_date}:",
-        f"Total capital: {total_capital:.2f} rubles",
-        f"This month, the {result_type} amounted to {result_amount:.2f} rubles.",
-        f"Income: {monthly_income:.2f} rubles",
-        f"Expenses: {monthly_expenses:.2f} rubles",
-        "",
-        "Details (category: amount):",
-    ]
-
-    sorted_categories = sorted(expenses_by_category.items(), key=lambda item: item[0].lower())
-    for index, (category_name, amount) in enumerate(sorted_categories, start=1):
-        stats_lines.append(f"{index}. {category_name}: {format_amount(amount)}")
-
-    return "\n".join(stats_lines)
+    totals, category_totals = _calculate_stats(date)
+    return "\n".join(_build_stats_lines(report_date, totals, category_totals))
 
 
 def print_handler_result(result: str) -> None:
@@ -293,8 +353,9 @@ def process_query() -> bool:
 
 
 def main() -> None:
-    while process_query():
-        continue
+    while True:
+        if not process_query():
+            break
 
 
 if __name__ == "__main__":
