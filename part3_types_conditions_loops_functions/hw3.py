@@ -104,7 +104,11 @@ def _strip_sign(amount: str) -> str:
 
 def _has_valid_amount_body(amount_body: str) -> bool:
     amount_parts = amount_body.split(".")
-    return len(amount_parts) <= MAX_AMOUNT_PARTS and all(amount_parts) and all(part.isdigit() for part in amount_parts)
+    if len(amount_parts) > MAX_AMOUNT_PARTS:
+        return False
+    if not all(amount_parts):
+        return False
+    return all(part.isdigit() for part in amount_parts)
 
 
 def extract_amount(maybe_amount: str) -> float | None:
