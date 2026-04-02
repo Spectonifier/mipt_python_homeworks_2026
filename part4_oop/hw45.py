@@ -16,16 +16,13 @@ class DictStorage(Storage[K, V]):
         self._data[key] = value
 
     def get(self, key: K) -> V | None:
-        if key in self._data:
-            return self._data[key]
-        return None
+        return self._data.get(key)
 
     def exists(self, key: K) -> bool:
         return key in self._data
 
     def remove(self, key: K) -> None:
-        if key in self._data:
-            del self._data[key]
+        self._data.pop(key, None)
 
     def clear(self) -> None:
         self._data.clear()
