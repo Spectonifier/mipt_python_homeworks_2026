@@ -99,14 +99,10 @@ class LFUPolicy(Policy[K]):
             return None
         keys_to_check = self._key_counter
         if self._last_new_key in self._key_counter:
-            filtered_keys = {
-                key: counter
-                for key, counter in self._key_counter.items()
-                if key != self._last_new_key
-            }
+            filtered_keys = {key: counter for key, counter in self._key_counter.items() if key != self._last_new_key}
             if filtered_keys:
                 keys_to_check = filtered_keys
-        return min(keys_to_check, key=keys_to_check.get)
+        return min(keys_to_check, key=lambda key: keys_to_check[key])
 
     def remove_key(self, key: K) -> None:
         self._key_counter.pop(key, None)
