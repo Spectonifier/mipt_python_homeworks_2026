@@ -36,7 +36,7 @@ EXPENSE_CATEGORIES = {
     "Clothing": ("Outerwear", "Casual", "Shoes", "Accessories"),
     "Education": ("Courses", "Books", "Tutors"),
     "Communications": ("Mobile", "Internet", "Subscriptions"),
-    "Other": ("SomeCategory", "SomeOtherCategory")
+    "Other": ("SomeCategory", "SomeOtherCategory"),
 }
 
 Date = tuple[int, int, int]
@@ -45,10 +45,6 @@ Totals = dict[str, float]
 CategoryTotals = dict[str, float]
 
 financial_transactions_storage: list[Transaction] = []
-
-
-def save_failed_transaction() -> None:
-    financial_transactions_storage.append({})
 
 
 def is_leap_year(year: int) -> bool:
@@ -108,9 +104,7 @@ def _strip_sign(amount: str) -> str:
 
 def _has_valid_amount_body(amount_body: str) -> bool:
     amount_parts = amount_body.split(".")
-    return len(amount_parts) <= MAX_AMOUNT_PARTS and all(amount_parts) and all(
-        part.isdigit() for part in amount_parts
-    )
+    return len(amount_parts) <= MAX_AMOUNT_PARTS and all(amount_parts) and all(part.isdigit() for part in amount_parts)
 
 
 def extract_amount(maybe_amount: str) -> float | None:
@@ -121,16 +115,17 @@ def extract_amount(maybe_amount: str) -> float | None:
 
 
 def income_handler(amount: float, income_date: str) -> str:
+    financial_transactions_storage.append({})
+
     if amount <= 0:
-        save_failed_transaction()
         return NONPOSITIVE_VALUE_MSG
 
     date = extract_date(income_date)
     if date is None:
-        save_failed_transaction()
         return INCORRECT_DATE_MSG
 
-    financial_transactions_storage.append({AMOUNT_KEY: amount, DATE_KEY: date})
+    financial_transactions_storage[-1][AMOUNT_KEY] = amount
+    financial_transactions_storage[-1][DATE_KEY] = date
     return OP_SUCCESS_MSG
 
 
@@ -149,20 +144,21 @@ def get_target_category(category_name: str) -> str:
 
 
 def cost_handler(category_name: str, amount: float, income_date: str) -> str:
+    financial_transactions_storage.append({})
+
     if amount <= 0:
-        save_failed_transaction()
         return NONPOSITIVE_VALUE_MSG
 
     if not is_valid_category(category_name):
-        save_failed_transaction()
         return NOT_EXISTS_CATEGORY
 
     date = extract_date(income_date)
     if date is None:
-        save_failed_transaction()
         return INCORRECT_DATE_MSG
 
-    financial_transactions_storage.append({CATEGORY_KEY: category_name, AMOUNT_KEY: amount, DATE_KEY: date})
+    financial_transactions_storage[-1][CATEGORY_KEY] = category_name
+    financial_transactions_storage[-1][AMOUNT_KEY] = amount
+    financial_transactions_storage[-1][DATE_KEY] = date
     return OP_SUCCESS_MSG
 
 
@@ -273,10 +269,6 @@ def _get_month_result(totals: Totals) -> tuple[str, float]:
     return "profit", monthly_balance
 
 
-def _category_sort_key(category_total: tuple[str, float]) -> str:
-    return category_total[0].lower()
-
-
 def _build_stats_header(report_date: str, totals: Totals) -> list[str]:
     result_type, result_amount = _get_month_result(totals)
     return [
@@ -292,7 +284,7 @@ def _build_stats_header(report_date: str, totals: Totals) -> list[str]:
 
 def _append_category_lines(stats_lines: list[str], category_totals: CategoryTotals) -> None:
     for index, (category_name, amount) in enumerate(
-        sorted(category_totals.items(), key=_category_sort_key),
+        sorted(category_totals.items(), key=lambda category_total: category_total[0].lower()),
         start=1,
     ):
         stats_lines.append(f"{index}. {category_name}: {format_amount(amount)}")
@@ -370,14 +362,15 @@ def process_query() -> bool:
     input_parts = input_line.split()
     command_name = input_parts[0]
 
-    if command_name == "income":
-        process_income_query(input_parts)
-    elif command_name == "cost":
-        process_cost_query(input_parts)
-    elif command_name == "stats":
-        process_stats_query(input_parts)
-    else:
-        print(UNKNOWN_COMMAND_MSG)
+    match command_name:
+        case "income":
+            process_income_query(input_parts)
+        case "cost":
+            process_cost_query(input_parts)
+        case "stats":
+            process_stats_query(input_parts)
+        case _:
+            print(UNKNOWN_COMMAND_MSG)
 
     return True
 
